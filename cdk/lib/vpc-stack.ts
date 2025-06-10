@@ -19,6 +19,10 @@ export class VpcStack extends cdk.Stack {
                 name: "private-",
                 subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
                 cidrMask: 24
+            }, {
+                name: "private-db-",
+                subnetType: ec2.SubnetType.PRIVATE_ISOLATED,
+                cidrMask: 24
             }],
             gatewayEndpoints: {
                 s3: {service: ec2.GatewayVpcEndpointAwsService.S3},
