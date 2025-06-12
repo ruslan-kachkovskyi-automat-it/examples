@@ -43,7 +43,7 @@ export class VpcStack extends cdk.Stack {
         })
 
         const extraSubnet = new ec2.PublicSubnet(this, 'ExtraSubnet', {
-            availabilityZone: `${props?.env?.region}-a`,
+            availabilityZone: `${props?.env?.region}a`,
             cidrBlock: "10.0.255.0/24",
             vpcId: vpc.vpcId
         });
