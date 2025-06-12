@@ -6,11 +6,12 @@ export class VpcStack extends cdk.Stack {
     constructor(scope: Construct, id: string, props?: cdk.StackProps) {
         super(scope, id, props);
 
-        const azs = ["a", "b", "c"].map(az => `${props?.env?.region}${az}`);
+        const number_of_availability_zones_to_use = 3;
 
         const vpc = new ec2.Vpc(this, 'TheVPC', {
             ipAddresses: ec2.IpAddresses.cidr('10.0.0.0/16'),
-            availabilityZones: azs,
+            availabilityZones: this.availabilityZones.slice(0, number_of_availability_zones_to_use),
+            reservedAzs:  this.availabilityZones.length - number_of_availability_zones_to_use,
             subnetConfiguration: [{
                 name: "public-",
                 subnetType: ec2.SubnetType.PUBLIC,
@@ -38,7 +39,7 @@ export class VpcStack extends cdk.Stack {
                     destination: ec2.FlowLogDestination.toS3()
                 }
             },
-            natGateways: azs.length
+            natGateways: number_of_availability_zones_to_use
         })
 
         vpc.addInterfaceEndpoint("ECR.DKR", {service: ec2.InterfaceVpcEndpointAwsService.ECR_DOCKER});
