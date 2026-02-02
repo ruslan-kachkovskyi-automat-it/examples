@@ -42,7 +42,6 @@ def read_proxy_protocol_payload(connection):
     length = struct.unpack("!H", header[14:16])[0]
     payload = read_exact(connection, length)
 
-    # Offset depends on the IP protocol version
     ip_protocol_version = header[13]
     offset = 12 if ip_protocol_version == 0x11 else 36
     return payload[offset:]
