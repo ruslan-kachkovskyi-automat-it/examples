@@ -4,54 +4,18 @@ import traceback
 
 import boto3
 
-# Set of the NLBs private IP addresses
-# PrivateLink traffic is coming from the NLB private IP address
-# https://docs.aws.amazon.com/elasticloadbalancing/latest/network/edit-target-group-attributes.html#client-ip-preservation
-VPC_ENDPOINT_SERVICE_PRIVATE_IP_ADDRESSES = set()
-
 # Dictionary with established VPC endpoint service connections
 # Key: VPC Endpoint ID
 # Value: Owner AWS Account ID
 VPC_ENDPOINT_SERVICE_CONNECTIONS = dict()
 
-ec2 = boto3.client("ec2", region_name="eu-west-1")
+ec2 = boto3.client("ec2")
 
 
-def get_nlb_private_ip_addresses(arn):
-    nlb_id = arn.split("/")[-1]
-    filters = [
-        {
-            'Name': 'interface-type',
-            'Values': ["network_load_balancer"]
-        },
-        {
-            "Name": "description",
-            "Values": [f"ELB net/nlb/{nlb_id}"]
-        }
-    ]
-
-    network_interfaces = ec2.describe_network_interfaces(Filters=filters)
-    for eni in network_interfaces.get("NetworkInterfaces", []):
-        if eni["PrivateIpAddress"]:
-            yield eni["PrivateIpAddress"]
-
-
-def update_vpc_endpoint_connections_info():
+def update_vpc_endpoint_service_connections():
     connections = ec2.describe_vpc_endpoint_connections().get('VpcEndpointConnections', [])
-    nlb_ips = (
-        ip
-        for conn in connections
-        for nlb in conn.get("NetworkLoadBalancerArns", [])
-        for ip in get_nlb_private_ip_addresses(nlb)
-    )
-
-    service_clients = {
-        connection["VpcEndpointId"]: connection["VpcEndpointOwner"]
-        for connection in connections
-    }
-
-    VPC_ENDPOINT_SERVICE_PRIVATE_IP_ADDRESSES.update(nlb_ips)
-    VPC_ENDPOINT_SERVICE_CONNECTIONS.update(service_clients)
+    for connection in connections:
+        VPC_ENDPOINT_SERVICE_CONNECTIONS[connection["VpcEndpointId"]] = connection["VpcEndpointOwner"]
 
 
 def read_exact(sock, n):
@@ -79,8 +43,8 @@ def read_proxy_protocol_payload(connection):
     payload = read_exact(connection, length)
 
     # Offset depends on the IP protocol version
-    fam_proto = header[13]
-    offset = 12 if fam_proto == 0x11 else 36
+    ip_protocol_version = header[13]
+    offset = 12 if ip_protocol_version == 0x11 else 36
     return payload[offset:]
 
 
@@ -95,9 +59,9 @@ def parse_tlv(data):
         yield tlv_type, value
 
 
-def parse_proxy_protocol_v2(payload):
+def get_vpc_endpoint_id(pp2_payload):
     # Parse and iterate over Type-Length-Value (TLV) vectors
-    for key, value in parse_tlv(payload):
+    for key, value in parse_tlv(pp2_payload):
         if key == 0xEA and value[0] == 0x01:  # PP2_TYPE_AWS and PP2_SUBTYPE_AWS_VPCE_ID
             vpce_id = value[1:].decode("UTF-8")
             return vpce_id
@@ -106,24 +70,24 @@ def parse_proxy_protocol_v2(payload):
 
 
 def main():
-    update_vpc_endpoint_connections_info()
+    update_vpc_endpoint_service_connections()
 
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server.bind(("0.0.0.0", 80))
     server.listen(5)
 
-    print("VPC_ENDPOINT_SERVICE_PRIVATE_IP_ADDRESSES", VPC_ENDPOINT_SERVICE_PRIVATE_IP_ADDRESSES)
-    print("VPC_ENDPOINT_SERVICE_PRIVATE_IP_ADDRESSES", VPC_ENDPOINT_SERVICE_CONNECTIONS)
+    print("VPC_ENDPOINT_SERVICE_CONNECTIONS", VPC_ENDPOINT_SERVICE_CONNECTIONS)
 
     while True:
         connection, (source_ip, _) = server.accept()
-        print(f"Established connection from {source_ip}")
-        # We need to always read it before the application data
+        print(f"Accepted connection from {source_ip}")
+        # We need to always read it before the application can start reading data
+        # We should connect only via NLB to avoid confusion
         pp2_payload = read_proxy_protocol_payload(connection)
         try:
-            if source_ip in VPC_ENDPOINT_SERVICE_PRIVATE_IP_ADDRESSES:
-                vpce_id = parse_proxy_protocol_v2(pp2_payload)
+            vpce_id = get_vpc_endpoint_id(pp2_payload)
+            if vpce_id:
                 partner_aws_account_id = VPC_ENDPOINT_SERVICE_CONNECTIONS[vpce_id]
                 payload = f"Your IP is hidden. Hello from the other side.\nConnection was established from {partner_aws_account_id} via {vpce_id}.\n"
             else:
